@@ -19,6 +19,11 @@ import (
 	"strings"
 )
 
+var (
+	As = errors.As
+	Is = errors.Is
+)
+
 type ConstError struct {
 	error
 	details []string
