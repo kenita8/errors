@@ -17,6 +17,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync"
 )
 
 var (
@@ -25,16 +26,17 @@ var (
 )
 
 type ConstError struct {
-	error
+	err     error
 	details []string
+	mu      sync.Mutex
 }
 
 func New(text string) *ConstError {
-	return &ConstError{error: errors.New(text)}
+	return &ConstError{err: errors.New(text)}
 }
 
 func (c *ConstError) Error() string {
-	text := c.error.Error()
+	text := c.err.Error()
 	if c.details != nil {
 		text += "("
 		text += strings.Join(c.details, ", ")
@@ -43,21 +45,48 @@ func (c *ConstError) Error() string {
 	return text
 }
 
+func (c *ConstError) Dup() *ConstError {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	err := &ConstError{
+		err: c.err,
+	}
+	if len(c.details) <= 0 {
+		return err
+	}
+	err.details = make([]string, len(c.details))
+	copy(err.details, c.details)
+	return err
+}
+
 func (c *ConstError) Wrap(err error) *WrappedError {
-	return &WrappedError{wrapper: c, wrapped: err}
+	newErr := c.Dup()
+	return &WrappedError{wrapper: newErr, wrapped: err}
 }
 
 func (c *ConstError) Details(kv ...any) *ConstError {
-	c.details = []string{}
+	newErr := c.Dup()
+	newErr.details = make([]string, 0, len(kv)/2+1)
 	for i := 0; i < len(kv); i += 2 {
 		key := kv[i]
 		var value any
 		if i+1 < len(kv) {
 			value = kv[i+1]
 		}
-		c.details = append(c.details, fmt.Sprintf("%v=%v", key, value))
+		newErr.details = append(newErr.details, fmt.Sprintf("%v=%v", key, value))
 	}
-	return c
+	return newErr
+}
+
+func (c *ConstError) Is(target error) bool {
+	if t, ok := target.(*ConstError); ok {
+		return errors.Is(c.err, t.err)
+	}
+	return errors.Is(c.err, target)
+}
+
+func (c *ConstError) Unwrap() error {
+	return c.err
 }
 
 type WrappedError struct {
@@ -67,7 +96,7 @@ type WrappedError struct {
 
 func (we *WrappedError) Error() string {
 	if we.wrapped != nil {
-		return we.wrapper.Error() + ": " + we.wrapped.Error()
+		return fmt.Sprintf("%s: %s", we.wrapper.Error(), we.wrapped.Error())
 	}
 	return we.wrapper.Error()
 }
@@ -84,5 +113,27 @@ func (err *WrappedError) Unwrap() error {
 }
 
 func (we *WrappedError) Is(target error) bool {
-	return we == target || errors.Is(we.wrapper, target) || errors.Is(we.wrapped, target)
+	return isErrorRecursive(we, target)
+}
+
+func isErrorRecursive(err error, target error) bool {
+	if err == nil {
+		return false
+	}
+
+	if constErr, ok := err.(*ConstError); ok {
+		if constTarget, ok := target.(*ConstError); ok {
+			return errors.Is(constErr.err, constTarget.err)
+		}
+		return errors.Is(constErr.err, target)
+	}
+
+	if wrappedErr, ok := err.(*WrappedError); ok {
+		if isErrorRecursive(wrappedErr.wrapper, target) {
+			return true
+		}
+		return isErrorRecursive(wrappedErr.wrapped, target)
+	}
+
+	return errors.Is(err, target)
 }
