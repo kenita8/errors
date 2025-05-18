@@ -107,11 +107,11 @@ func (s *WrappedError) WithDetails(kv ...any) *WrappedError {
 }
 
 func (e *WrappedError) Is(target error) bool {
-	return errors.Is(e.err, target)
+	return errors.Is(e.err, target) || errors.Is(e.cause, target)
 }
 
 func (e *WrappedError) As(target any) bool {
-	return errors.As(e.err, target)
+	return errors.As(e.err, target) || errors.As(e.cause, target)
 }
 
 func (e *WrappedError) Unwrap() error {
